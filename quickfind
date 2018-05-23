@@ -1,0 +1,206 @@
+#!/bin/bash
+
+# Prefer ag to ack as it seems to be faster
+if which ag &> /dev/null; then
+  SEARCH_CMD=ag
+else
+  SEARCH_CMD=ack
+fi
+
+QF_TYPE='files'
+COORDS=0
+REGEX=''
+LIST_FLAG=''
+SINGLE_RESULT=0
+CLEAN_IMPORT=0
+
+# Hack to work around ag's lack of support for -1
+ag1() {
+  ag "$@" | head -n 1
+}
+
+# Fork flags for ag and ack depending on which we're using
+SINGLE_FLAG_VALUE='-1'
+LIST_FLAG_VALUE='-l'
+case "$SEARCH_CMD" in
+  ack)
+    BASE_FLAGS='--scala --python'
+    ;;
+  ag)
+    BASE_FLAGS=''
+    SINGLE_FLAG_VALUE=''  # Unsupported :(
+    ;;
+  *)
+    echo "Unsupported search command $SEARCH_CMD"
+    ;;
+esac
+
+# TODO: Add a help section; this script is becoming increasingly complex
+
+FLAGS="$BASE_FLAGS"
+
+while [[ "$1" != '' ]]; do
+  case "$1" in
+    -d|--def|--definition)
+      shift
+      QF_TYPE='def'
+      ;;
+    -i|--import)
+      shift
+      QF_TYPE='import'
+      ;;
+    -c|--class|--trait)
+      shift
+      QF_TYPE='class'
+      ;;
+    -f|--file)
+      shift
+      QF_TYPE='files'
+      ;;
+    -u|--usage)
+      shift
+      QF_TYPE='usage'
+      ;;
+    -l)
+      shift
+      LIST_FLAG="$LIST_FLAG_VALUE"
+      ;;
+    -1)
+      shift
+      FLAGS="$FLAGS $SINGLE_FLAG_VALUE"
+      SINGLE_RESULT=1
+      ;;
+    --coords)
+      shift
+      COORDS=1
+      ;;
+    --clean-import)
+      shift
+      CLEAN_IMPORT=1
+      ;;
+    # Vim quickfix format. --quickfix implies --coords
+    --quickfix)
+      shift
+      COORDS=1
+      QUICKFIX=1
+      ;;
+    --tool)
+      shift
+      SEARCH_CMD="$1"
+      shift
+      ;;
+    -*)
+      echo "Unexpected flag $1" 2>&1
+      exit 1
+      ;;
+    *)
+      if [[ "$ARG" != '' ]]; then
+        echo 'Only one argument is accepted' 2>&1
+        exit 2
+      fi
+      ARG="$1"
+      shift
+      ;;
+  esac
+done
+
+select_regex() {
+  case "$QF_TYPE" in
+    files)
+      REGEX="^.*$1.*$"
+      FLAGS="-g $FLAGS"
+      ;;
+    def)
+      REGEX="def $1[\[\(: ]"
+      ;;
+    class)
+      REGEX='(class|trait|object|type) '"$1"'([\[\(\{ ]|$)'
+      ;;
+    import)
+      REGEX="import .*[\.\{, ]$1"'([\}, ]|$)'
+      ;;
+    usage)
+      REGEX="$ARG"
+      FLAGS="-Q $FLAGS"
+      ;;
+    *)
+      exit 100
+      ;;
+  esac
+}
+
+find_char_pos() {
+  LINE="$1"
+  # TODO: This has stopped working; grep -b is reporting incorrect indices. Figure out why.
+  CPOS=$(echo "$LINE" | grep -b "$ARG" | head -n 1 | cut -d ':' -f 1)
+}
+
+# Read search results and format them in a way easily parseable as character positions
+# FIXME: CPOS seems to be broken again
+convert_to_coords() {
+  while read line; do
+    # TODO: This might fail if there's a colon in the path
+    FILENAME=$(echo "$line" | cut -d ':' -f 1)
+    LINE_NUM=$(echo "$line" | cut -d ':' -f 2)
+    LINE_SAMPLE=$(echo "$line" | cut -d ':' -f '3-')
+    find_char_pos "$LINE_SAMPLE"
+
+    if [[ "$QUICKFIX" == 1 ]]; then
+      echo "$FILENAME:$LINE_NUM:$CPOS:$LINE_SAMPLE"
+    else
+      echo "$FILENAME:$LINE_NUM:$CPOS"
+    fi
+  done
+}
+
+clean_imports() {
+  while read line; do
+    echo "$line" | cut -d ':' -f '3-' | sed -E "s/^(.+\.).*$/\1$ARG/"
+  done
+}
+
+if [[ "$COORDS" == 1 && "$QF_TYPE" == files ]]; then
+  echo '--coords and --file are incompatible' 1>&2
+  exit 3
+fi
+
+if [[ "$QF_TYPE" != import && "$CLEAN_IMPORT" == 1 ]]; then
+  echo '--clean-import must be used with -i flag' 1>&2
+  exit 4
+fi
+
+# ack doesn't accept -g and -l in combination, but I'll be more permissive and simply
+# remove the -l if we need to use -g
+if [[ "$QF_TYPE" == 'files' ]]; then
+  LIST_FLAG=''
+fi
+
+# The list flag also needs to be disabled if we're collecting char position
+if [[ "$COORDS" == 1 ]]; then
+  LIST_FLAG=''
+  FLAGS="--no-group $FLAGS"
+fi
+
+FLAGS="$FLAGS $LIST_FLAG"
+select_regex "$ARG"
+
+# Hack for ag
+if [[ "$SINGLE_RESULT" == 1 && "$SEARCH_CMD" == ag ]]; then
+  SEARCH_CMD=ag1
+fi
+
+# Some post-processing if we want coords
+if [[ "$COORDS" == 1 ]]; then
+  $SEARCH_CMD $FLAGS "$REGEX" | convert_to_coords
+  exit $?
+fi
+
+# Some post-processing if we asked for clean imports, too
+if [[ "$QF_TYPE" == import && "$CLEAN_IMPORT" == 1 ]]; then
+  $SEARCH_CMD $FLAGS "$REGEX" | clean_imports
+  exit $?
+fi
+
+# Basic search
+$SEARCH_CMD $FLAGS "$REGEX"
+exit 0
