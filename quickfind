@@ -1,210 +1,241 @@
-#!/bin/bash
+#!/usr/bin/env python2.7
+import argparse
+import re
+import subprocess
 
-# Prefer ag to ack as it seems to be faster
-if which ag &> /dev/null; then
-  SEARCH_CMD=ag
-else
-  SEARCH_CMD=ack
-fi
+SEARCH_DEFS = 'defs'
+SEARCH_FILES = 'files'
+SEARCH_CLASSES = 'classes'
+SEARCH_IMPORTS = 'imports'
+SEARCH_USAGES = 'usages'
 
-QF_TYPE='files'
-COORDS=0
-REGEX=''
-LIST_FLAG=''
-SINGLE_RESULT=0
-CLEAN_IMPORT=0
+SEARCH_MODES = (
+    SEARCH_DEFS, SEARCH_FILES, SEARCH_CLASSES, SEARCH_IMPORTS, SEARCH_USAGES
+)
 
-# Hack to work around ag's lack of support for -1
-ag1() {
-  ag "$@" | head -n 1
-}
+FORMAT_COORDS = 'coords'
+FORMAT_FILES = 'file_list'
+FORMAT_IMPORT = 'clean_imports'
+FORMAT_QUICKFIX = 'quickfix'
 
-# Fork flags for ag and ack depending on which we're using
-SINGLE_FLAG_VALUE='-1'
-LIST_FLAG_VALUE='-l'
-case "$SEARCH_CMD" in
-  ack)
-    BASE_FLAGS='--scala --python'
-    ;;
-  ag)
-    BASE_FLAGS=''
-    SINGLE_FLAG_VALUE=''  # Unsupported :(
-    ;;
-  *)
-    echo "Unsupported search command $SEARCH_CMD"
-    ;;
-esac
+FORMATS = (FORMAT_COORDS, FORMAT_FILES, FORMAT_QUICKFIX)
 
-# TODO: Add a help section; this script is becoming increasingly complex
 
-FLAGS="$BASE_FLAGS"
+class Hit(object):
+    def __init__(self, term, fn, text, line=None, col=None):
+        self.term = term
+        self.filename = fn
+        self.text = text
+        self.line = line
+        self.col = col
 
-while [[ "$1" != '' ]]; do
-  case "$1" in
-    -d|--def|--definition)
-      shift
-      QF_TYPE='def'
-      ;;
-    -i|--import)
-      shift
-      QF_TYPE='import'
-      ;;
-    -c|--class|--trait)
-      shift
-      QF_TYPE='class'
-      ;;
-    -f|--file)
-      shift
-      QF_TYPE='files'
-      ;;
-    -u|--usage)
-      shift
-      QF_TYPE='usage'
-      ;;
-    -l)
-      shift
-      LIST_FLAG="$LIST_FLAG_VALUE"
-      ;;
-    -1)
-      shift
-      FLAGS="$FLAGS $SINGLE_FLAG_VALUE"
-      SINGLE_RESULT=1
-      ;;
-    --coords)
-      shift
-      COORDS=1
-      ;;
-    --clean-import)
-      shift
-      CLEAN_IMPORT=1
-      ;;
-    # Vim quickfix format. --quickfix implies --coords
-    --quickfix)
-      shift
-      COORDS=1
-      QUICKFIX=1
-      ;;
-    --tool)
-      shift
-      SEARCH_CMD="$1"
-      shift
-      ;;
-    -*)
-      echo "Unexpected flag $1" 2>&1
-      exit 1
-      ;;
-    *)
-      if [[ "$ARG" != '' ]]; then
-        echo 'Only one argument is accepted' 2>&1
-        exit 2
-      fi
-      ARG="$1"
-      shift
-      ;;
-  esac
-done
 
-select_regex() {
-  case "$QF_TYPE" in
-    files)
-      REGEX="^.*$1.*$"
-      FLAGS="-g $FLAGS"
-      ;;
-    def)
-      REGEX="def $1[\[\(: ]"
-      ;;
-    class)
-      REGEX='(class|trait|object|type) '"$1"'([\[\(\{ ]|$)'
-      ;;
-    import)
-      REGEX="import .*[\.\{, ]$1"'([\}, ]|$)'
-      ;;
-    usage)
-      REGEX="$ARG"
-      FLAGS="-Q $FLAGS"
-      ;;
-    *)
-      exit 100
-      ;;
-  esac
-}
+class QuickFind(object):
+    def __init__(
+        self,
+        term,
+        search_type,
+        format,
+        single_result=False
+    ):
+        self.term = term
+        self.search_type = search_type
+        self.format = format
+        self.single_result = single_result
 
-find_char_pos() {
-  LINE="$1"
-  # TODO: This has stopped working; grep -b is reporting incorrect indices. Figure out why.
-  CPOS=$(echo "$LINE" | grep -b "$ARG" | head -n 1 | cut -d ':' -f 1)
-}
+    def _call_ag(self, args):
+        """
+        Call ag with the given arguments and fetch the raw output, split into
+        lines. Handle errors in the subprocess, and squash the case where there
+        are no results (i.e. exit code non-zero and no output)
+        """
+        cmd = ['ag'] + args
 
-# Read search results and format them in a way easily parseable as character positions
-# FIXME: CPOS seems to be broken again
-convert_to_coords() {
-  while read line; do
-    # TODO: This might fail if there's a colon in the path
-    FILENAME=$(echo "$line" | cut -d ':' -f 1)
-    LINE_NUM=$(echo "$line" | cut -d ':' -f 2)
-    LINE_SAMPLE=$(echo "$line" | cut -d ':' -f '3-')
-    find_char_pos "$LINE_SAMPLE"
+        output = None
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            if e.output:
+                raise
 
-    if [[ "$QUICKFIX" == 1 ]]; then
-      echo "$FILENAME:$LINE_NUM:$CPOS:$LINE_SAMPLE"
-    else
-      echo "$FILENAME:$LINE_NUM:$CPOS"
-    fi
-  done
-}
+            output = ''
 
-clean_imports() {
-  while read line; do
-    echo "$line" | cut -d ':' -f '3-' | sed -E "s/^(.+\.).*$/\1$ARG/"
-  done
-}
+        results = [
+            l.strip() for l in output.split('\n')
+        ]
+        return [r for r in results if r]
 
-sort_results() {
-  sort -n /dev/stdin
-}
+    def _search_files(self):
+        """
+        Just return hits containing filename results. Search with ag -g
+        """
+        results = self._call_ag(['-g', self.term])
+        return [Hit(self.term, r, None) for r in results]
 
-if [[ "$COORDS" == 1 && "$QF_TYPE" == files ]]; then
-  echo '--coords and --file are incompatible' 1>&2
-  exit 3
-fi
+    def _search_content(self, regex):
+        """
+        Do a full search of files and collect all the relevant data into Hits
+        """
+        results = self._call_ag(['-s', '--column', regex])
+        parsed = []
 
-if [[ "$QF_TYPE" != import && "$CLEAN_IMPORT" == 1 ]]; then
-  echo '--clean-import must be used with -i flag' 1>&2
-  exit 4
-fi
+        for r in results:
+            r = r.strip()
+            if not r:
+                continue
 
-# ack doesn't accept -g and -l in combination, but I'll be more permissive and simply
-# remove the -l if we need to use -g
-if [[ "$QF_TYPE" == 'files' ]]; then
-  LIST_FLAG=''
-fi
+            pieces = r.split(':')
+            parsed.append(Hit(
+                self.term,
+                pieces[0],
+                ':'.join(pieces[3:]),
+                pieces[1],
+                pieces[2],
+            ))
+        return parsed
 
-# The list flag also needs to be disabled if we're collecting char position
-if [[ "$COORDS" == 1 ]]; then
-  LIST_FLAG=''
-  FLAGS="--no-group $FLAGS"
-fi
+    def search(self):
+        if self.search_type == SEARCH_FILES:
+            return self._search_files()
 
-FLAGS="$FLAGS $LIST_FLAG"
-select_regex "$ARG"
+        raw_term = r'\Q%s\E' % self.term
+        regex = {
+            SEARCH_DEFS: r'def %s[\[\(: ]',
+            SEARCH_CLASSES: (
+                r'(?:class|trait|object|type)%s(?:[\[\(\{ ]|$)',
+            ),
+            SEARCH_IMPORTS: r'import .*[\.\{, ]%s',
+            SEARCH_USAGES: r'%s'
+        }.get(self.search_type, r'%s') % raw_term
 
-# Hack for ag
-if [[ "$SINGLE_RESULT" == 1 && "$SEARCH_CMD" == ag ]]; then
-  SEARCH_CMD=ag1
-fi
+        return self._search_content(regex)
 
-# Some post-processing if we want coords
-if [[ "$COORDS" == 1 ]]; then
-  $SEARCH_CMD $FLAGS "$REGEX" | convert_to_coords
-  exit $?
-fi
+    def _generate_import(self, hit):
+        """Generate a scala import based on the search term and hit"""
+        prefix = re.sub(r'^\s*import ([^\s]+\.).*$', r'\1', hit)
+        return 'import %s.%s' % (prefix, self.term)
 
-# Some post-processing if we asked for clean imports, too
-if [[ "$QF_TYPE" == import && "$CLEAN_IMPORT" == 1 ]]; then
-  $SEARCH_CMD $FLAGS "$REGEX" | clean_imports
-  exit $?
-fi
+    def format_hit(self, hit):
+        if self.format == FORMAT_FILES:
+            return hit.filename
 
-# Basic search
-$SEARCH_CMD $FLAGS "$REGEX" | sort_results
-exit 0
+        if self.format == FORMAT_QUICKFIX:
+            return '%s:%s:%s:%s' % (hit.filename, hit.line, hit.col, hit.text)
+
+        if self.format == FORMAT_COORDS:
+            return '%s:%s:%s' % (hit.filename, hit.line, hit.col)
+
+        if self.format == FORMAT_IMPORT:
+            return self._generate_import(hit.text)
+
+        raise Exception('Unsupported format %s' % self.format)
+
+    def run(self):
+        hits = self.search()
+        formatted = [self.format_hit(h) for h in hits]
+        unique = set(formatted)
+        results = sorted(list(unique))
+
+        if self.single_result and self.results:
+            results = results[0]
+
+        for h in results:
+            print(h)
+
+
+def main():
+    parser = argparse.ArgumentParser('quickfind v2')
+    parser.add_argument(
+        '-d', '--def', '--definition', dest=SEARCH_DEFS, action='store_true',
+        help='Search for defs / methods / functions'
+    )
+    parser.add_argument(
+        '-c', '--class', '--trait', dest=SEARCH_CLASSES, action='store_true',
+        help='Search for classes / traits'
+    )
+    parser.add_argument(
+        '-i', '--import', dest=SEARCH_IMPORTS, action='store_true',
+        help='Search for imports'
+    )
+    parser.add_argument(
+        '-f', '--file', dest=SEARCH_FILES, action='store_true',
+        help='Search for filenames'
+    )
+    parser.add_argument(
+        '-u', '--usage', dest=SEARCH_USAGES, action='store_true',
+        help='Search for usages (i.e. any appearance of the term)'
+    )
+    parser.add_argument(
+        '-l', '--list', dest=FORMAT_FILES, action='store_true',
+        help='List resulting filenames only'
+    )
+    parser.add_argument(
+        '-1', dest='single_result', action='store_true',
+        help='Provide only the first hit'
+    )
+    parser.add_argument(
+        '-x', '--coords', dest=FORMAT_COORDS, action='store_true',
+        help='Provide line/col coordinates to the resulting hit'
+    )
+    parser.add_argument(
+        '--clean-import', dest='clean_import', action='store_true',
+        help=(
+            'Only valid with -i. Provide import hits reformatted to remove '
+            'other imports in the block found, providing an import statement '
+            'which only imports the specified type'
+        )
+    )
+    parser.add_argument(
+        '-q', '--quickfix', dest=FORMAT_QUICKFIX, action='store_true',
+        help='Provide hits in vim\'s quickfix format, with lines and cols'
+    )
+    parser.add_argument('term', type=str)
+    args = parser.parse_args()
+
+    search_mode = SEARCH_FILES
+    found_mode = False
+    for mode in SEARCH_MODES:
+        if getattr(args, mode, None) is True:
+            if found_mode:
+                raise Exception('Multiple search types specified')
+
+            search_mode = mode
+            found_mode = True
+
+    format = FORMAT_QUICKFIX
+    found_format = False
+    for f in FORMATS:
+        if getattr(args, f, None) is True:
+            if found_format:
+                raise Exception('Multiple formats specified')
+
+            format = f
+            found_format = True
+
+    if args.clean_import:
+        if search_mode != SEARCH_IMPORTS:
+            raise Exception('--clean-import can only be used with -i')
+
+        format = FORMAT_IMPORT
+
+    args.term = args.term.strip()
+    if not args.term:
+        raise Exception('Empty or whitespace-only search term provided')
+
+    if search_mode == SEARCH_FILES:
+        if format != FORMAT_FILES and found_format:
+            raise Exception('Bad format type while searching for files')
+
+        format = FORMAT_FILES
+
+    finder = QuickFind(
+        term=args.term,
+        search_type=search_mode,
+        format=format,
+        single_result=args.single_result
+    )
+    finder.run()
+
+
+if __name__ == '__main__':
+    main()
