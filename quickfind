@@ -159,6 +159,10 @@ clean_imports() {
   done
 }
 
+sort_results() {
+  sort -n /dev/stdin
+}
+
 if [[ "$COORDS" == 1 && "$QF_TYPE" == files ]]; then
   echo '--coords and --file are incompatible' 1>&2
   exit 3
@@ -202,5 +206,5 @@ if [[ "$QF_TYPE" == import && "$CLEAN_IMPORT" == 1 ]]; then
 fi
 
 # Basic search
-$SEARCH_CMD $FLAGS "$REGEX"
+$SEARCH_CMD $FLAGS "$REGEX" | sort_results
 exit 0
