@@ -112,7 +112,7 @@ class QuickFind(object):
 
     def _generate_import(self, hit):
         """Generate a scala import based on the search term and hit"""
-        prefix = re.sub(r'^\s*import ([^\s]+\.).*$', r'\1', hit)
+        prefix = re.sub(r'^\s*import ([^\s]+)\..*$', r'\1', hit)
         return 'import %s.%s' % (prefix, self.term)
 
     def format_hit(self, hit):
@@ -136,8 +136,8 @@ class QuickFind(object):
         unique = set(formatted)
         results = sorted(list(unique))
 
-        if self.single_result and self.results:
-            results = results[0]
+        if self.single_result and results:
+            results = [results[0]]
 
         for h in results:
             print(h)
