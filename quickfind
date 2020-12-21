@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
 import argparse
 import re
 import subprocess
@@ -59,6 +59,8 @@ class QuickFind(object):
                 raise
 
             output = ''
+        else:
+            output = output.decode('utf-8')
 
         results = [
             l.strip() for l in output.split('\n')
@@ -98,37 +100,37 @@ class QuickFind(object):
         if self.search_type == SEARCH_FILES:
             return self._search_files()
 
-        raw_term = r'\Q%s\E' % self.term
+        raw_term = r'\Q{}\E'.format(self.term)
         regex = {
-            SEARCH_DEFS: r'def %s[\[\(: ]',
+            SEARCH_DEFS: r'def {}[\[\(: ]',
             SEARCH_CLASSES: (
-                r'(?:class|trait|object|type) %s\s*(?:[\[\(\{ ]|$)'
+                r'(?:class|trait|object|type) {}\s*(?:[\[\(\{{ ]|$)'
             ),
-            SEARCH_IMPORTS: r'import .*[\.\{, ]%s',
-            SEARCH_USAGES: r'%s'
-        }.get(self.search_type, r'%s') % raw_term
+            SEARCH_IMPORTS: r'import .*[\.\{, ]{}',
+            SEARCH_USAGES: r'{}'
+        }.get(self.search_type, r'{}').format(raw_term)
 
         return self._search_content(regex)
 
     def _generate_import(self, hit):
         """Generate a scala import based on the search term and hit"""
         prefix = re.sub(r'^\s*import ([^\s]+)\..*$', r'\1', hit)
-        return 'import %s.%s' % (prefix, self.term)
+        return 'import {}.{}'.format(prefix, self.term)
 
     def format_hit(self, hit):
         if self.format == FORMAT_FILES:
             return hit.filename
 
         if self.format == FORMAT_QUICKFIX:
-            return '%s:%s:%s:%s' % (hit.filename, hit.line, hit.col, hit.text)
+            return ':'.join((hit.filename, hit.line, hit.col, hit.text))
 
         if self.format == FORMAT_COORDS:
-            return '%s:%s:%s' % (hit.filename, hit.line, hit.col)
+            return ':'.join((hit.filename, hit.line, hit.col))
 
         if self.format == FORMAT_IMPORT:
             return self._generate_import(hit.text)
 
-        raise Exception('Unsupported format %s' % self.format)
+        raise Exception('Unsupported format %s'.format(self.format))
 
     def run(self):
         hits = self.search()
