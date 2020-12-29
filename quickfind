@@ -106,7 +106,7 @@ class QuickFind(object):
             SEARCH_CLASSES: (
                 r'(?:class|trait|object|type) {}\s*(?:[\[\(\{{ ]|$)'
             ),
-            SEARCH_IMPORTS: r'import .*[\.\{, ]{}',
+            SEARCH_IMPORTS: r'import .*[\.\{{, ]{}',
             SEARCH_USAGES: r'{}'
         }.get(self.search_type, r'{}').format(raw_term)
 
