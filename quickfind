@@ -63,7 +63,7 @@ class QuickFind(object):
             output = output.decode('utf-8')
 
         results = [
-            l.strip() for l in output.split('\n')
+            line.strip() for line in output.split('\n')
         ]
         return [r for r in results if r]
 
@@ -130,7 +130,7 @@ class QuickFind(object):
         if self.format == FORMAT_IMPORT:
             return self._generate_import(hit.text)
 
-        raise Exception('Unsupported format %s'.format(self.format))
+        raise ValueError('Unsupported format {}'.format(self.format))
 
     def run(self):
         hits = self.search()
