@@ -102,11 +102,11 @@ class QuickFind(object):
 
         raw_term = r'\Q{}\E'.format(self.term)
         regex = {
-            SEARCH_DEFS: r'def {}[\[\(: ]',
+            SEARCH_DEFS: r'(?:def|fn|function) {}[\[\(: ]',
             SEARCH_CLASSES: (
-                r'(?:class|trait|object|type) {}\s*(?:[\[\(\{{: ]|$)'
+                r'(?:class|trait|object|type|struct|impl) {}\s*(?:[\[\(\{{: ]|$)'
             ),
-            SEARCH_IMPORTS: r'import .*[\.\{{, ]{}(?:[\{{\}}, ]|$)',
+            SEARCH_IMPORTS: r'(?:import|use) .*[\.\{{,: ]{}(?:[\{{\}},; ]|$)',
             SEARCH_USAGES: r'{}'
         }.get(self.search_type, r'{}').format(raw_term)
 
