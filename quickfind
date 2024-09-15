@@ -104,7 +104,7 @@ class QuickFind(object):
         regex = {
             SEARCH_DEFS: r'(?:def|fn|function) {}[\[\(: ]',
             SEARCH_CLASSES: (
-                r'(?:class|trait|object|type|struct|impl) {}\s*(?:[\[\(\{{: ]|$)'
+                r'(?:class|trait|object|type|struct|impl|enum) {}\s*(?:[\[\(\{{: ]|$)'
             ),
             SEARCH_IMPORTS: r'(?:import|use) .*[\.\{{,: ]{}(?:[\{{\}},; ]|$)',
             SEARCH_USAGES: r'{}'
